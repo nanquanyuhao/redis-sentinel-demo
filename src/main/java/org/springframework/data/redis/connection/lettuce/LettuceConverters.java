@@ -34,6 +34,11 @@ import org.springframework.data.geo.Metric;
 import org.springframework.data.geo.Metrics;
 import org.springframework.data.geo.Point;
 import org.springframework.data.redis.connection.*;
+import org.springframework.data.redis.connection.BitFieldSubCommands.BitFieldGet;
+import org.springframework.data.redis.connection.BitFieldSubCommands.BitFieldIncrBy;
+import org.springframework.data.redis.connection.BitFieldSubCommands.BitFieldIncrBy.Overflow;
+import org.springframework.data.redis.connection.BitFieldSubCommands.BitFieldSet;
+import org.springframework.data.redis.connection.BitFieldSubCommands.BitFieldSubCommand;
 import org.springframework.data.redis.connection.RedisClusterNode.Flag;
 import org.springframework.data.redis.connection.RedisClusterNode.LinkState;
 import org.springframework.data.redis.connection.RedisClusterNode.SlotRange;
@@ -50,6 +55,7 @@ import org.springframework.data.redis.connection.convert.Converters;
 import org.springframework.data.redis.connection.convert.ListConverter;
 import org.springframework.data.redis.connection.convert.LongToBooleanConverter;
 import org.springframework.data.redis.connection.convert.StringToRedisClientInfoConverter;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.types.Expiration;
 import org.springframework.data.redis.core.types.RedisClientInfo;
 import org.springframework.data.redis.util.ByteUtils;
@@ -814,6 +820,93 @@ abstract public class LettuceConverters extends Converters {
             geoArgs.withCount(args.getLimit());
         }
         return geoArgs;
+    }
+
+    /**
+     * Convert {@link BitFieldSubCommands} into {@link BitFieldArgs}.
+     *
+     * @param subCommands
+     * @return
+     * @since 2.1
+     */
+    public static BitFieldArgs toBitFieldArgs(BitFieldSubCommands subCommands) {
+
+        BitFieldArgs args = new BitFieldArgs();
+
+        for (BitFieldSubCommand subCommand : subCommands) {
+
+            BitFieldArgs.BitFieldType bft = subCommand.getType().isSigned()
+                    ? BitFieldArgs.signed(subCommand.getType().getBits())
+                    : BitFieldArgs.unsigned(subCommand.getType().getBits());
+
+            BitFieldArgs.Offset offset;
+            if (subCommand.getOffset().isZeroBased()) {
+                offset = BitFieldArgs.offset((int) subCommand.getOffset().getValue());
+            } else {
+                offset = BitFieldArgs.typeWidthBasedOffset((int) subCommand.getOffset().getValue());
+            }
+
+            if (subCommand instanceof BitFieldGet) {
+                args = args.get(bft, offset);
+            } else if (subCommand instanceof BitFieldSet) {
+                args = args.set(bft, offset, ((BitFieldSet) subCommand).getValue());
+            } else if (subCommand instanceof BitFieldIncrBy) {
+
+                BitFieldIncrBy.Overflow overflow = ((BitFieldIncrBy) subCommand).getOverflow();
+                if (overflow != null) {
+
+                    BitFieldArgs.OverflowType type;
+
+                    switch (overflow) {
+                        case SAT:
+                            type = BitFieldArgs.OverflowType.SAT;
+                            break;
+                        case FAIL:
+                            type = BitFieldArgs.OverflowType.FAIL;
+                            break;
+                        case WRAP:
+                            type = BitFieldArgs.OverflowType.WRAP;
+                            break;
+                        default:
+                            throw new IllegalArgumentException(
+                                    String.format("Invalid OVERFLOW. Expected one the following %s but got %s.",
+                                            Arrays.toString(Overflow.values()), overflow));
+                    }
+                    args = args.overflow(type);
+                }
+
+                args = args.incrBy(bft, (int) subCommand.getOffset().getValue(), ((BitFieldIncrBy) subCommand).getValue());
+            }
+        }
+
+        return args;
+    }
+
+    /**
+     * Convert {@link ScanOptions} to {@link ScanArgs}.
+     *
+     * @param options the {@link ScanOptions} to convert, may be {@literal null}.
+     * @return the converted {@link ScanArgs}. Returns {@literal null} if {@link ScanOptions} is {@literal null}.
+     * @see 2.1
+     */
+    @Nullable
+    static ScanArgs toScanArgs(@Nullable ScanOptions options) {
+
+        if (options == null) {
+            return null;
+        }
+
+        ScanArgs scanArgs = new ScanArgs();
+
+        if (options.getPattern() != null) {
+            scanArgs.match(options.getPattern());
+        }
+
+        if (options.getCount() != null) {
+            scanArgs.limit(options.getCount());
+        }
+
+        return scanArgs;
     }
 
     /**
